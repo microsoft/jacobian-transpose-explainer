@@ -1,0 +1,464 @@
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+<!DOCTYPE html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+
+<title>Mapping of functions</title>
+
+<script language="javascript" src="https://cdnjs.cloudflare.com/ajax/libs/processing.js/1.6.6/processing.js"></script>
+
+<script language="javascript">
+  baseRadius = 20.0;
+  mX = 0;
+  mY = 0;
+  square1X = 10;
+  square1Y = 10;
+  square2X = 690;
+  square2Y = 690;
+
+  gradientX = 150;
+  gradientY = 150;
+
+  differentialX = 150;
+  differentialY = 150;
+
+  startTime = new Date();
+
+  // The 2d mapping that we will visualise in the app
+  function mapping2d(x, y) {
+      var xc = 350;
+      var yc = 300;
+      var k = -0.000002;
+      var r2 = (x - xc) * (x - xc) + (y - yc) * (y - yc);
+      var xu = xc + (x - xc) / (2 * (1 + k * r2));
+      var yu = yc + (y - yc) / (4 * (0.05 - k * r2));
+      return [ xu + yu * 0.3 - 100, yu * 0.6 + y / 4 + xu / 2 - 110 ];
+  }
+
+  function mapping2dJT(x, y, d_df1, d_df2) {
+      var xc = 350;
+      var yc = 300;
+      var k = -0.000002;
+
+      var r2 = (x - xc) * (x - xc) + (y - yc) * (y - yc);
+
+      var dr2_dx = 2*(x-xc);
+      var dr2_dy = 2*(y-yc);
+
+      var denomx = (2 * (1 + k * r2));
+      var xu = xc + (x - xc) / denomx;
+
+      var denomy = (4 * (0.05 - k * r2));
+      var yu = yc + (y - yc) / denomy;
+
+      var denomx_dx = 2 * k * dr2_dx;
+      var denomx_dy = 2 * k * dr2_dy;
+      
+      var denomy_dx = 4 * -k * dr2_dx;
+      var denomy_dy = 4 * -k * dr2_dy;
+
+      var dxu_dx = 1 / denomx - (x - xc) * denomx_dx / (denomx * denomx);
+      var dxu_dy = -(x - xc) * denomx_dy / (denomx * denomx);
+      
+      var dyu_dx = - (y - yc) * denomy_dx / (denomy * denomy);
+      var dyu_dy = 1 / denomy - (y - yc) * denomy_dy / (denomy * denomy);
+
+      var df1_dx = dxu_dx + dyu_dx * 0.3;
+      var df2_dx = dyu_dx * 0.6 + 0 + dxu_dx / 2;
+
+      var df1_dy = dxu_dy + dyu_dy * 0.3;
+      var df2_dy = dyu_dy * 0.6 + 1 / 4 + dxu_dy / 2;
+
+      return [ d_df1 * df1_dx + d_df2 * df2_dx,
+	       d_df1 * df1_dy + d_df2 * df2_dy ]
+  }
+
+  // Duplication, but what are we going to do?  We don't have an AD
+  // engine.
+  function mapping2dJ(x, y, dx, dy) {
+      var xc = 350;
+      var yc = 300;
+      var k = -0.000002;
+
+      var r2 = (x - xc) * (x - xc) + (y - yc) * (y - yc);
+
+      var dr2_dx = 2*(x-xc);
+      var dr2_dy = 2*(y-yc);
+
+      var denomx = (2 * (1 + k * r2));
+      var xu = xc + (x - xc) / denomx;
+
+      var denomy = (4 * (0.05 - k * r2));
+      var yu = yc + (y - yc) / denomy;
+
+      var denomx_dx = 2 * k * dr2_dx;
+      var denomx_dy = 2 * k * dr2_dy;
+      
+      var denomy_dx = 4 * -k * dr2_dx;
+      var denomy_dy = 4 * -k * dr2_dy;
+
+      var dxu_dx = 1 / denomx - (x - xc) * denomx_dx / (denomx * denomx);
+      var dxu_dy = -(x - xc) * denomx_dy / (denomx * denomx);
+      
+      var dyu_dx = - (y - yc) * denomy_dx / (denomy * denomy);
+      var dyu_dy = 1 / denomy - (y - yc) * denomy_dy / (denomy * denomy);
+
+      var df1_dx = dxu_dx + dyu_dx * 0.3;
+      var df2_dx = dyu_dx * 0.6 + 0 + dxu_dx / 2;
+
+      var df1_dy = dxu_dy + dyu_dy * 0.3;
+      var df2_dy = dyu_dy * 0.6 + 1 / 4 + dxu_dy / 2;
+
+      return [ df1_dx * dx + df1_dy * dy,
+               df2_dx * dx + df2_dy * dy ]
+  }
+
+  function gradientHeight(x, y, xc, yc) {
+      return (x - xc) * gradientX
+	  + (y - yc) * gradientY;
+  }
+
+  function clip(x) {
+      return Math.min(Math.max(x, 0), 255);
+  }
+
+  function colour(h) {
+      if (h > 0) {
+	  return "rgb(" + clip(Math.sqrt(h)) + ",0,0)";
+      } else {
+	  return "rgb(0,0," + clip(Math.sqrt(-h)) + ")";
+      }
+  }
+
+  function mouseWithin(x, y, mouseX, mouseY, r) {
+      var dx = x - mouseX;
+      var dy = y - mouseY;
+      
+      return dx * dx + dy * dy <= r * r;
+  }
+
+</script>
+
+</head>
+
+<body>
+<div align="center">
+
+<script type="application/processing">
+bool moving1 = false;
+bool moving2 = false;
+bool movingPoint = true;
+
+// Setup the Processing Canvas
+void setup(){
+  size( 700, 700 );
+  mX = width / 2;
+  mY = width / 2;
+  nX = mX;
+  nY = mY;  
+}
+
+// Main draw loop
+void draw(){
+  var radius = baseRadius + 4 * sin( (new Date() - startTime) / 250 );
+  
+  // Update point
+  if (movingPoint) {
+      mX = nX;
+      mY = nY;
+  }
+  
+  var gradX_gradY = mapping2dJT(mX, mY, gradientX, gradientY);
+  var gradX = gradX_gradY[0];
+  var gradY = gradX_gradY[1];
+
+  var step = 50;
+  var r    = 25;
+
+  for (int i = 0; i < 700; i+=step) {
+      for (int j = 0; j < 700; j+=step) {
+	  var c = document.getElementById("leftcanvas");
+	  var ctx = c.getContext("2d");
+
+	  var this_gradX_gradY = mapping2dJT(i+r, j+r, gradientX, gradientY);
+	  var this_gradX = this_gradX_gradY[0];
+	  var this_gradY = this_gradX_gradY[1];
+
+	  var m = max(abs(this_gradX), abs(this_gradY));
+	  var ii = this_gradX / m;
+	  var jj = this_gradY / m;
+
+	  var grd = ctx.createLinearGradient(i+r-ii*r, j+r-jj*r,
+					     i+r+ii*r, j+r+jj*r);
+
+	  var xc_yc = mapping2d(mX,mY);
+	  var xc = xc_yc[0];
+	  var yc = xc_yc[1];
+
+          function bar (iii, jjj) {
+	      var x_y = mapping2d(iii, jjj);
+	      var x = x_y[0];
+	      var y = x_y[1];
+	      var r2 = gradientHeight(x, y, xc, yc);
+	      var r = colour(r2);
+	      return r;
+	  }
+
+	  var ptot = 2;
+	  for (var p = -ptot; p <= ptot; p++) {
+	      var proportion = (p - -ptot) / (ptot - -ptot);
+	      var radj = p / ptot;
+
+	      grd.addColorStop(proportion, bar(i + r + ii * r * radj,
+					       j + r + jj * r * radj));
+	  }
+
+	  ctx.fillStyle = grd;
+	  ctx.fillRect(i, j, step, step);
+      }
+  }
+
+  // Set stroke-color white
+  stroke(255); 
+  
+    var g = 20;
+
+    for (int i = 0; i <= g; i++) {
+	for (int j = 0; j < g; j++) {
+	    xdist = (square2X - square1X) / g;
+	    ydist = (square2Y - square1Y) / g;
+
+	    strokeWeight(2);
+	    if (moving1 || moving2) {
+		stroke(255, 0, 0);
+	    } else {
+		stroke(255, 255, 255);
+	    }
+	    line(square1X + i * xdist,
+		 square1Y + j * ydist,
+		 square1X + i * xdist,
+		 square1Y + (j + 1) * ydist
+		);
+	}
+    }
+
+    for (int i = 0; i < g; i++) {
+	for (int j = 0; j <= g; j++) {
+	    xdist = (square2X - square1X) / g;
+	    ydist = (square2Y - square1Y) / g;
+
+	    strokeWeight(2);
+	    line(square1X + i * xdist,
+		 square1Y + j * ydist,
+		 square1X + (i + 1) * xdist,
+		 square1Y + j * ydist
+		);
+	}
+    }
+
+  stroke(0,200,0);
+  strokeWeight(7);
+  line(mX, mY, mX + gradX, mY + gradY);
+
+  stroke(255, 255, 0);
+  strokeWeight(7);
+  line(mX, mY, mX + differentialX, mY + differentialY);
+
+  // Draw circle
+  strokeWeight(2);
+  if (movingPoint) {
+      stroke(255, 255, 255);
+  } else {
+      stroke(255, 0, 0);
+  }
+
+  // The point
+  fill( 0, 0, 190 );
+  strokeWeight(2);
+  ellipse( mX, mY, radius, radius );
+}
+
+  void mouseClicked(){
+      if (mouseButton == LEFT) {
+          if (!moving1 && !moving2 && !movingPoint) {
+	      if (mouseWithin(square1X, square1Y, mouseX, mouseY, 10)) {
+	          moving1 = true;
+	      } else if (mouseWithin(square2X, square2Y, mouseX, mouseY, 10)) {
+	          moving2 = true;
+	      } else if (mouseWithin(mX, mY, mouseX, mouseY, 10)) {
+	          movingPoint = true;
+              }
+          } else {
+	      moving1     = false;
+	      moving2     = false;
+	      movingPoint = false;
+          }
+      } else if (mouseButton == RIGHT) {
+          differentialX = mouseX - mX;
+          differentialY = mouseY - mY;
+      }
+  }
+
+// Set circle's next destination
+void mouseMoved(){
+  nX = mouseX;
+  nY = mouseY;  
+
+    if (moving1) {
+	square1X = nX;
+	square1Y = nY;
+    }
+
+    if (moving2) {
+	square2X = nX;
+	square2Y = nY;
+    }
+}
+</script>
+
+<canvas width="400px" height="400px" align="absmiddle" id="leftcanvas"></canvas>
+
+<script type="application/processing">
+// Setup the Processing Canvas
+void setup(){
+  size( 700, 700 );
+}
+
+// Main draw loop
+void draw(){
+  var radius = baseRadius + 4 * sin( (new Date() - startTime) / 250 );
+
+  var step = 50;
+  var r = 25;
+
+  for (int i = 0; i < 700; i+=step) {
+      for (int j = 0; j < 700; j+=step) {
+	  var xc_yc = mapping2d(mX,mY);
+	  var xc = xc_yc[0];
+	  var yc = xc_yc[1];
+
+	  var c = document.getElementById("rightcanvas");
+	  var ctx = c.getContext("2d");
+
+	  var m = max(abs(gradientX), abs(gradientY));
+	  var ii = gradientX / m;
+	  var jj = gradientY / m;
+
+	  var grd = ctx.createLinearGradient(i+r-ii*r, j+r-jj*r,
+					     i+r+ii*r, j+r+jj*r);
+
+
+	  var ptot = 2;
+	  for (var p = -ptot; p <= ptot; p++) {
+	      var proportion = (p - -ptot) / (ptot - -ptot);
+	      var radj = p / ptot;
+
+	      grd.addColorStop(proportion,
+			       colour(gradientHeight(i + r + ii * r * radj,
+						     j + r + jj * r * radj,
+						     xc,
+						     yc)));
+	  }
+
+	  ctx.fillStyle = grd;
+	  ctx.fillRect(i, j, step, step);
+      }
+  }
+
+  // Set stroke-color white
+  stroke(255); 
+  
+    var g = 20;
+
+    for (int i = 0; i <= g; i++) {
+	for (int j = 0; j < g; j++) {
+	    var xdist = (square2X - square1X) / g;
+	    var ydist = (square2Y - square1Y) / g;
+
+	    var x1_y1 = mapping2d(square1X + i * xdist,
+				  square1Y + j * ydist);
+
+	    var x2_y2 = mapping2d(square1X + i * xdist,
+				  square1Y + (j + 1) * ydist);
+
+	    var x1 = x1_y1[0];
+	    var y1 = x1_y1[1];
+	    var x2 = x2_y2[0];
+	    var y2 = x2_y2[1];
+
+	    strokeWeight(2);
+	    line(x1, y1, x2, y2);
+	}
+    }
+
+    for (int i = 0; i < g; i++) {
+	for (int j = 0; j <= g; j++) {
+	    var xdist = (square2X - square1X) / g;
+	    var ydist = (square2Y - square1Y) / g;
+
+	    var x1_y1 = mapping2d(square1X + i * xdist,
+				  square1Y + j * ydist);
+
+	    var x2_y2 = mapping2d(square1X + (i + 1) * xdist,
+				  square1Y + j * ydist);
+
+	    var x1 = x1_y1[0];
+	    var y1 = x1_y1[1];
+	    var x2 = x2_y2[0];
+	    var y2 = x2_y2[1];
+
+	    strokeWeight(2);
+	    line(x1, y1, x2, y2);
+	}
+    }
+
+  var cX_cY = mapping2d(mX, mY);
+  var cX = cX_cY[0];
+  var cY = cX_cY[1];
+  
+  stroke(0,200,0);
+  strokeWeight(7);
+  line(cX, cY, cX + gradientX, cY + gradientY);
+
+  stroke(255, 255, 0);
+  var dX_dY = mapping2dJ(mX, mY, differentialX, differentialY);
+  var dX = dX_dY[0];
+  var dY = dX_dY[1];
+  line(cX, cY, cX + dX, cY + dY);
+
+  // The mapped point
+  stroke(255);
+  fill( 0, 127, 190 );
+  strokeWeight(2);
+  ellipse( cX, cY, radius, radius );
+}
+
+void mouseClicked(){
+    if (mouseButton == RIGHT) {
+        var cX_cY = mapping2d(mX, mY);
+        var cX = cX_cY[0];
+        var cY = cX_cY[1];
+  
+        gradientX = mouseX - cX;
+        gradientY = mouseY - cY;
+    }
+}
+</script>
+
+<canvas width="400px" height="400px" align="absmiddle" id="rightcanvas"></canvas>
+</div>
+
+<p><ul>
+    <li>Left mouse button: pick up and place point (in the domain)</li>
+    <li>Right mouse button: place differential (in the domain) or gradient (in the range)</li>
+</ul></p>
+
+<noscript>
+  <div>
+    <p>It seems that Javascript is not enabled</p>
+  </div>
+</noscript>
+
+</body>
+</html>
